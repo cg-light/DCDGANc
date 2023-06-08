@@ -20,14 +20,14 @@ import torch
 
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 parser = argparse.ArgumentParser()
 parser.add_argument("--filename", type=str, default="../../../paras/DCDGANc", help="storage path")
 parser.add_argument("--epoch", type=int, default=0, help="epoch to start training from")
-parser.add_argument("--n_class", type=int, default=4, help="number of classes")
-parser.add_argument("--dataset_name", type=str, default="wood", help="name of the dataset")
+parser.add_argument("--n_class", type=int, default=5, help="number of classes")
+parser.add_argument("--dataset_name", type=str, default="carpet", help="name of the dataset")
 parser.add_argument("--noise", type=str, default=False, help="insert noise or not")
-parser.add_argument("--sample_interval", type=int, default=170, help="interval between saving generator samples")
+parser.add_argument("--sample_interval", type=int, default=250, help="interval between saving generator samples")
 parser.add_argument("--latent_dim", type=int, default=8, help="number of latent codes")
 parser.add_argument("--res_num", type=int, default=4, help="number of classes")
 parser.add_argument("--checkpoint_interval", type=int, default=2, help="interval between model checkpoints")
@@ -112,10 +112,11 @@ def sample_images(batches_done):
     generator.eval()
     img_samples = None
     for label in range(opt.n_class):
-        real_label = torch.ones((1, opt.n_class))
+        real_label = torch.zeros((1, opt.n_class))
+        real_label[0, label] = 1
         real_label = real_label.repeat(8, 1)
         real_label = real_label.type(Tensor)
-        clabels = ((2.0 // opt.n_class - 1) * label)
+        clabels = 2 * label / (opt.n_class - 1) - 1
         clabels = np.array(clabels)
         clabels = Tensor(clabels).repeat(8, 1)  # -1, 1
         # Sample latent representations
@@ -139,7 +140,7 @@ def compute_gradient_penalty(D, real_samples, fake_samples, l):
     alpha = Tensor(np.random.random((real_samples.size(0), 1, 1, 1)))
     # Get random interpolation between real and fake samples
     interpolates = (alpha * real_samples + ((1 - alpha) * fake_samples)).requires_grad_(True)
-    d_interpolates, _ = D.compute_loss(interpolates, l, fake, y)
+    d_interpolates = D.compute_loss(interpolates, l, valid)
     # Get gradient w.r.t. interpolates
     gradients = autograd.grad(
         outputs=d_interpolates,
@@ -185,15 +186,14 @@ if __name__ == "__main__":
             real_B = imgs.type(Tensor)
             y = ys
             labels = torch.zeros((real_B.size(0), opt.n_class))
-            glabels = torch.ones((real_B.size(0), opt.n_class))
             j = 0
             for yc in ys:
                 labels[j, yc] = 1
                 j += 1
             labels = labels.type(Tensor)
-            glabels = glabels.type(Tensor)
-            clabels = ((2 // opt.n_class - 1) * ys).type(Tensor)  # -1, 1
-            ys = ys.type(torch.LongTensor).cuda()
+            # glabels = glabels.type(Tensor)
+            clabels = ((2 * ys / (opt.n_class - 1) - 1)).type(Tensor)  # -1, 1
+            # ys = ys.type(torch.LongTensor).cuda()
 
             # -------------------------------
             #  Train Generator and Encoder
@@ -214,17 +214,15 @@ if __name__ == "__main__":
             # Pixelwise loss of translated image by VAE
             loss_pixel = mae_loss(fake_B, real_B)
             # Adversarial loss
-            loss_VAE_GAN, loss_VAE_cls = D_VAE.compute_loss(fake_B, labels, valid, y)
-            # loss_VAE_cls = C.compute_loss(fake_B, y)
+            loss_VAE_GAN = D_VAE.compute_loss(fake_B, labels, valid)
 
             # ---------
             # cLR-GAN 采样z生成的图像骗过鉴别器
             # ---------
             # Produce output using sampled z (cLR-GAN)
             sampled_z = Tensor(np.random.normal(0, 1, (real_B.size(0), opt.latent_dim)))
-            _fake_B = generator(clabels, labels.detach(), sampled_z)
-            # cLR Loss: Adversarial loss
-            loss_LR_GAN, loss_LR_cls = D_VAE.compute_loss(_fake_B, labels, valid, y)
+            _fake_B = generator(clabels, labels, sampled_z)
+            loss_LR_GAN = D_VAE.compute_loss(_fake_B, labels, valid)
 
             # ----------------------------------
             # Total Loss (Generator + Encoder)
@@ -251,12 +249,12 @@ if __name__ == "__main__":
 
             optimizer_D_VAE.zero_grad()
 
-            loss_adv_r, loss_cls_r = D_VAE.compute_loss(real_B, labels, valid, y)
-            loss_adv_f, loss_cls_f = D_VAE.compute_loss(fake_B.detach(), labels, fake, y)
-            loss_adv_f_, loss_cls_f_ = D_VAE.compute_loss(_fake_B.detach(), labels, fake, y)
+            loss_adv_r = D_VAE.compute_loss(real_B, labels, valid)
+            loss_adv_f = D_VAE.compute_loss(fake_B.detach(), labels, fake)
+            loss_adv_f_ = D_VAE.compute_loss(_fake_B.detach(), labels, fake)
             loss_VAE_gp = opt.lambda_gp * (compute_gradient_penalty(D_VAE, real_B.detach(), _fake_B.detach(), labels) +
                                            compute_gradient_penalty(D_VAE, real_B.detach(), fake_B.detach(), labels))
-            loss_D_VAE = 2*loss_adv_r + loss_adv_f + loss_adv_f_ + loss_VAE_gp
+            loss_D_VAE = 2 * loss_adv_r + loss_adv_f + loss_adv_f_ + loss_VAE_gp
             loss_D_VAE.backward()
             optimizer_D_VAE.step()
 

@@ -154,7 +154,6 @@ class down_block(nn.Module):
         for model in self.models:
             if self.norm_type == 'spade' or self.norm_type == 'adain':
                 if i == 1:
-                    # print(model, i)
                     x = model(x, z)
                 else:
                     x = model(x)
@@ -298,8 +297,8 @@ class MulticlassDis(nn.Module):
             return layers
 
         self.in_layers = nn.ModuleList([nn.Linear(c_dim, h * w),
-                                       nn.Linear(c_dim, h * w // 4),
-                                       nn.Linear(c_dim, h * w // 16)])
+                                        nn.Linear(c_dim, h * w // 4),
+                                        nn.Linear(c_dim, h * w // 16)])
         self.models = nn.ModuleList()
         self.out_layers = nn.ModuleList()
         for i in range(3):
@@ -315,9 +314,9 @@ class MulticlassDis(nn.Module):
             self.out_layers.append(nn.Conv2d(256, 1, 3, padding=1))
         self.down_sample = nn.AvgPool2d(channels + 1, stride=2, padding=[1, 1], count_include_pad=False)
 
-    def compute_loss(self, img, label, gt, y):
+    def compute_loss(self, img, label, gt):
         loss_c = sum([torch.mean(out - gt) ** 2 for out in self.forward(img, label)])
-        return loss_c, True
+        return loss_c
 
     def forward(self, img, label):
         # input = label.repeat(1, self.img_size * self.img_size).view(img.size(0), 1, self.img_size, self.img_size)
@@ -346,36 +345,23 @@ class Multiclass(nn.Module):
             if norm_type:
                 layers.append(nn.InstanceNorm2d(out_filters))
                 # layers.append(nn.BatchNorm2d(out_filters, 0.8))
-            layers.append(nn.LeakyReLU(0.2))
+            layers.append(nn.LeakyReLU(0.2, inplace=True))
             return layers
 
-        # self.in_layer = nn.ModuleList([nn.Linear(c_dim, h * w),
-        #                                nn.Linear(c_dim, h * w // 4),
-        #                                nn.Linear(c_dim, h * w // 16)])
-        self.models = nn.ModuleList()
-        self.out_layers = nn.ModuleList()
-        for i in range(3):
-            self.models.add_module(
-                'class %s' % i,
-                nn.Sequential(
-                    *discriminator_block(channels, 64),
-                    *discriminator_block(64, 128),
-                    *discriminator_block(128, 256),
-                    *discriminator_block(256, 256),
-                    nn.Conv2d(256, 1, 3, padding=1)
-                )
-            )
-        self.down_sample = nn.AvgPool2d(channels, stride=2, padding=[1, 1], count_include_pad=False)
+        self.in_layer = nn.Linear(c_dim, h * w)
+        self.models = nn.Sequential(
+            *discriminator_block(channels + 1, 64),
+            *discriminator_block(64, 128),
+            *discriminator_block(128, 256),
+            *discriminator_block(256, 512),
+            nn.Conv2d(512, 1, 3, padding=1)
+        )
 
-    def compute_loss(self, img, label, gt, clabel):
-        loss_c = sum([torch.mean(out - gt) ** 2 for out in self.forward(img, label, clabel)])
-        return loss_c, True
+    def compute_loss(self, img, label, gt):
+        loss_c = sum([torch.mean(out - gt) ** 2 for out in self.forward(img, label)])
+        return loss_c
 
-    def forward(self, img, label, clabel):
-        outputs = []
-        i = 0
-        for model in self.models:
-            outputs.append(model(img))
-            img = self.down_sample(img)
-            i += 1
-        return outputs
+    def forward(self, img, label):
+        in_c = self.in_layer(label).reshape(img.size(0), 1, img.size(2), img.size(3))
+        img = torch.cat((img, in_c), dim=1)
+        return self.models(img)

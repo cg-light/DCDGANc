@@ -47,10 +47,8 @@ class ImageDataset(Dataset):
         if self.unaligned:
             image = Image.open(self.files[y][random.randint(0, (len(self.files[y]) - 1))])
         else:
-            # for y in range(self.class_count):
             image = Image.open(self.files[y][index % len(self.files[y])])
         img = self.transform(image)
-        # print(item)
         return img, y
 
     def __len__(self):
